@@ -40,18 +40,17 @@ curve in [`TRAINING-LOG.md`](TRAINING-LOG.md), including where it is noisy.
 
 ### What the difference looks like
 
-Both from the same gemma-3-12b run, same prompt set. First the model as shipped:
+Two samples from the same gemma-3-12b run. **These are different prompts, not a
+matched pair.** Read them as flavour, not as evidence. The evidence is the table
+above.
+
+Sampler off, three yardstick terms in the passage:
 
 > The scent of lilies and ozone still clung to **Elara**. She'd been pulling
 > them from her hair for days, but the floral phantom persisted, a constant
 > reminder of the moment Kratos, god of storms [...]
 
-That sample also contains `testament to`, `shimmering` and `kaleidoscope`. Note
-the character name: **Elara** is the paper's own headline example, measured at
-85,513 times more frequent in this model family's output than in human writing.
-It appeared unprompted.
-
-The same model with the sampler active:
+Sampler on, one yardstick term:
 
 > The vet's hands were gentle, too gentle. They smelled of antiseptic and a
 > strange, quiet sadness, and I didn't want to breathe them in. I didn't want
@@ -59,9 +58,30 @@ The same model with the sampler active:
 > steady thump-thump-thump of his heart slowing, slowing, slowing until it was
 > just a ghost echo.
 
-Concrete detail instead of stock fantasy vocabulary. Worth saying plainly:
-suppression is not total. That second passage still contains one yardstick
-term. The measured reduction is roughly 70%, not 100%.
+Concrete detail instead of stock fantasy vocabulary. Suppression is not total.
+That second passage still contains a yardstick term. The measured reduction is
+roughly 70%, not 100%.
+
+### The name problem, which this method handles worst
+
+The first passage contains **Elara**, the paper's headline example, measured at
+85,513 times more frequent in this model family's output than in human writing.
+The base model reached for it unprompted. That is all I can claim. `Elara` is on
+the ban lists, so the sampler was configured to catch it, but names were not in
+my yardstick and I released the GPU before thinking to check. Whether it
+survived into the sampled output is unmeasured.
+
+Names are the weak case for banning in general. Of forty stock character names I
+checked against the shipped 2,000-word list, seventeen are banned (`Elara`,
+`Lyra`, `Kael`, `Seraphina`, `Aeliana`, `Thorne`, `Isolde`) and twenty-three are
+not (`Cassian`, `Soren`, `Vesper`, `Rowan`, `Thalia`, `Lucian`, `Nyx`).
+
+Ban a name and the model takes the next one down. A phrase like `testament to`
+has no equally good substitute, so suppressing it forces an actual rewrite. A
+name has thousands of substitutes and the swap costs the model nothing. This is
+why the paper's design is iterative regeneration rather than one fixed list, and
+it is the part of the approach I would want to measure properly before claiming
+anything about it.
 
 ---
 
