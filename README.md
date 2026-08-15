@@ -35,7 +35,8 @@ measurement is not grading its own homework. Two model sizes, consistent result.
 Same model, same rank, same eight target modules, same ten unfrozen layers.
 The patched run reached the project's own convergence threshold
 (`chosen_win 0.8566`, early-stopped at step 35/69, loss 3.9119 to 1.0184) on a
-card with **57% of the memory and about a third of the hourly cost**.
+card with **57% of the memory and about a third of the hourly cost**. Full
+curve in [`TRAINING-LOG.md`](TRAINING-LOG.md), including where it is noisy.
 
 ### What the difference looks like
 
