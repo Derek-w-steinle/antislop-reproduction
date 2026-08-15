@@ -1,24 +1,31 @@
 """Two memory fixes for auto-antislop's FTPO trainer.
 
-Diagnosis (verified by reading the code, 2026-08-15): fine-tuning gemma-3-12b
-at LoRA rank 256 OOM'd on a 141GB H200 using 139.6 GiB. Halving the rank to 128
-did NOT help, which ruled out the adapters as the cause. Two things dominate:
+Diagnosis (verified live on rented GPUs, 2026-08-15): fine-tuning gemma-3-12b
+at LoRA rank 256 (batch 1, grad accum 16, max seq 4000, 4-bit base) OOM'd on a
+141GB H200 using 139.6 GiB. A fallback attempt at rank 128 with 6 unfrozen
+layers instead of 10 still OOM'd at ~138.9 GiB, which ruled out the adapters as
+the cause. Two things dominate:
 
 FIX 1 - gradient checkpointing is silently disabled on the transformers path.
   `finetune_gradient_checkpointing` is read in exactly one place,
   core/finetuning.py:497, which sits INSIDE the `if use_unsloth:` branch. With
   finetune_use_unsloth: false (required, since unsloth breaks the install) the
-  setting is dead code and checkpointing never turns on. For a 48-layer 12B at
-  batch 3 x seq 2500 that is roughly 76 GiB of activations held for no reason.
+  setting is dead code and checkpointing never turns on. A 48-layer 12B at
+  seq 4000 with eager attention then keeps every layer's activations, including
+  the seq x seq attention matrices, for the whole backward pass.
 
-FIX 2 - the forward computes 2500x more logits than the loss uses.
+FIX 2 - the forward computes 4000x more logits than the loss uses.
   ftpo_trainer.py builds logits for every position, then reads only the last:
       logits_last = outputs.logits[:, -1, :]
   `[:, -1, :]` is a view, so the whole [B, L, V] tensor stays alive. At
-  3 x 2500 x 262208 in bf16 that is 3.66 GiB per tensor, and there are several
-  live copies across the policy and reference passes. Passing logits_to_keep=1
-  is mathematically identical (the slice still selects the final position) and
-  removes nearly all of it.
+  1 x 4000 x 262208 in bf16 that is ~1.95 GiB per forward, three forwards per
+  step across the policy and reference passes, before counting the float32
+  copies the loss math makes. Passing logits_to_keep=1 is mathematically
+  identical (the slice still selects the final position) and removes nearly
+  all of it.
+
+With both fixes the identical rank-256 configuration trained in 28.3 GiB on an
+A100 80GB and converged (chosen_win 0.8566).
 
 Run from the auto-antislop repo root:  python3 ftpo_memory_patch.py
 Idempotent; re-running is safe.
@@ -60,9 +67,12 @@ def patch_checkpointing():
         "        # finetune_gradient_checkpointing is only honoured in the\n"
         "        # unsloth branch, so on this path it never turns on. Without\n"
         "        # it a 48-layer 12B holds every layer's activations.\n"
+        "        # use_reentrant MUST be True here. False crashes at step 0\n"
+        "        # with a checkpoint metadata mismatch (saved [1, 4000, 3840]\n"
+        "        # float32 vs recomputed [4000, 3840] bfloat16), verified live.\n"
         "        if config.get('finetune_gradient_checkpointing', True):\n"
         "            model.gradient_checkpointing_enable(\n"
-        "                gradient_checkpointing_kwargs={'use_reentrant': False})\n"
+        "                gradient_checkpointing_kwargs={'use_reentrant': True})\n"
         "            model.enable_input_require_grads()\n"
         "            model.config.use_cache = False\n"
         "            print('[patch] gradient checkpointing ENABLED "

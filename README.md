@@ -28,15 +28,40 @@ measurement is not grading its own homework. Two model sizes, consistent result.
 
 | Configuration | GPU | Peak VRAM | Result |
 |---|---|---|---|
-| As shipped, LoRA rank 256 | H200 141GB | 139.6 GiB | out of memory |
-| As shipped, LoRA rank 128 | H200 141GB | ~138.9 GiB | out of memory |
-| **Patched, LoRA rank 256** | **A100 80GB** | **28.3 GiB** | **converged** |
+| As shipped, rank 256, 10 unfrozen layers | H200 141GB | 139.6 GiB | out of memory |
+| As shipped, rank 128, 6 unfrozen layers | H200 141GB | 138.9 GiB | out of memory |
+| **Patched, rank 256, 10 unfrozen layers** | **A100 80GB** | **28.3 GiB** | **converged** |
 
-Same model, same rank, same eight target modules, same ten unfrozen layers.
+The first and third rows are the same configuration in every memory-relevant
+setting. Same model, LoRA rank 256 with alpha 256 across the same eight target
+modules, ten unfrozen layers, batch size 1 with gradient accumulation 16,
+4,000-token max sequence, 4-bit base, eager attention. I verified that after
+the fact against the session's full command record rather than trusting memory,
+and batch and sequence length are also confirmed at runtime, since a crash
+message from an early patched attempt names the tensor shape `[1, 4000, 3840]`,
+which is batch 1, sequence 4000, and gemma-3-12b's hidden size.
+
 The patched run reached the project's own convergence threshold
 (`chosen_win 0.8566`, early-stopped at step 35/69, loss 3.9119 to 1.0184) on a
 card with **57% of the memory and about a third of the hourly cost**. Full
 curve in [`TRAINING-LOG.md`](TRAINING-LOG.md), including where it is noisy.
+
+One note on the 139.6 GiB figure. That is where the run died, not where it
+would have topped out. A killed run only shows the memory it had reached when
+it hit the wall, so the true unpatched requirement is something above 141 GB
+and unknown. On a bigger card the left side of this comparison would likely
+read higher, which makes the roughly 5x saving a floor rather than an estimate.
+
+Two other differences between the runs, disclosed rather than buried. The A100
+run built its FTPO dataset from 120 prompts against the H200's 1,000, which
+changes how many optimizer steps there are, not how much memory one step takes
+at batch size 1. The A100 run demonstrably hit the 4,000-token cap (that crash
+tensor again); the H200's batch lengths are not recoverable, and if its batches
+happened to be shorter it ran out of memory on an even lighter workload, which
+would only make the contrast larger. And the two peak figures come from
+different instruments. The
+139.6 GiB is what the CUDA out-of-memory report said was in use when the H200
+run died, while the 28.3 GiB is nvidia-smi polled repeatedly during training.
 
 ### What the difference looks like
 
@@ -88,15 +113,29 @@ anything about it.
 ## How I found it
 
 The fine-tune ran out of memory on a 141GB card. The obvious response is to
-rent a bigger one. Before doing that I halved the LoRA rank from 256 to 128,
-expecting a large drop.
+rent a bigger one. The overnight run had been scripted with a fallback chain,
+smaller configuration after smaller configuration, so by morning there were
+three data points instead of one.
 
-**Memory barely moved.** 139.6 GiB to roughly 138.9 GiB.
+| attempt | adapters | result |
+|---|---|---|
+| rank 256, all 8 modules, 10 layers | full size | OOM at 139.6 GiB |
+| rank 128, all 8 modules, 6 layers | roughly half | OOM at 138.9 GiB |
+| rank 64, lm_head only, 4 layers | a fraction | trained |
 
-That non-result is the whole finding. If halving the adapter size changes
-almost nothing, the adapters are not what is consuming the memory, so no amount
-of shrinking them will help and a bigger GPU only buys headroom for waste.
-Reading the source from that starting point turned up two causes.
+**Rows one and two are the finding.** Cutting the adapters roughly in half,
+and the unfrozen layer count nearly in half with them, moved peak memory by
+half of one percent. If shrinking the adapters changes almost nothing, the
+adapters are not what is consuming the memory, so no amount of shrinking them
+will help and a bigger GPU only buys headroom for waste.
+
+Row three points the same way from the other side. It fit not because its
+adapters were smaller but because backprop only had to reach into the top few
+layers, so far fewer activations were kept alive. Useful as a diagnostic,
+useless as a result, since it is nowhere near the paper's configuration.
+
+Reading the source while looking for a large fixed cost that ignores adapter
+size turned up two causes.
 
 ### Cause 1: gradient checkpointing never turns on
 
@@ -122,8 +161,9 @@ layer's activations.
 
 ### Cause 2: full-vocabulary logits computed for every position, one used
 
-All three forward passes in `core/ftpo_trainer.py` compute logits for the whole
-sequence and then read a single position:
+All three forward passes in `core/ftpo_trainer.py`, two on the policy model and
+one on the reference model (lines 218, 260 and 265), compute logits for the
+whole sequence and then read a single position:
 
 ```python
 outputs = model(ids, attention_mask=attn, position_ids=pos_full,
@@ -133,12 +173,16 @@ logits_last = outputs.logits[:, -1, :]   # [B, V]
 
 `[:, -1, :]` returns a view, so the full `[B, L, V]` tensor stays alive for the
 rest of the loss. FTPO only ever needs the final token, which is the point of
-the method. For gemma-3-12b (vocab 262,208) at batch 3 and sequence 2500 in
-bf16 that is about 3.66 GiB per tensor, several times over across the policy
-and reference passes.
+the method. For gemma-3-12b (vocab 262,208) at batch 1 and sequence 4000 in
+bf16 that is about 1.95 GiB per forward, three forwards per step, before
+counting the float32 copies the loss math makes.
 
 `logits_to_keep=1` produces the same values through the same slice without
 building the rest.
+
+Line numbers in both causes were re-verified against upstream `main` on the day
+of writing (commit `da22315`, 2026-07-29). `logits_to_keep` appears zero times
+in the trainer, and no upstream commit addresses either issue.
 
 ---
 
@@ -183,6 +227,11 @@ an 80GB card.
 results reproduced, and I measured a 74% and a 69% reduction myself. This is an
 engineering issue in released research code, which is an ordinary thing to find
 and an easy thing to fix.
+
+Worth saying as well. None of this would have been possible if the authors had
+not released their code. Finding a fixable issue in a public implementation is
+the system working, and releasing code that people can poke at is the
+generous half of that exchange.
 
 Everything above was run on rented GPUs (RunPod A100 80GB and H200 141GB) with
 gemma-3-4b-it and gemma-3-12b-it via the ungated `unsloth/` mirrors.
