@@ -37,6 +37,31 @@ The patched run reached the project's own convergence threshold
 (`chosen_win 0.8566`, early-stopped at step 35/69, loss 3.9119 to 1.0184) on a
 card with **57% of the memory and about a third of the hourly cost**.
 
+### What the difference looks like
+
+Both from the same gemma-3-12b run, same prompt set. First the model as shipped:
+
+> The scent of lilies and ozone still clung to **Elara**. She'd been pulling
+> them from her hair for days, but the floral phantom persisted, a constant
+> reminder of the moment Kratos, god of storms [...]
+
+That sample also contains `testament to`, `shimmering` and `kaleidoscope`. Note
+the character name: **Elara** is the paper's own headline example, measured at
+85,513 times more frequent in this model family's output than in human writing.
+It appeared unprompted.
+
+The same model with the sampler active:
+
+> The vet's hands were gentle, too gentle. They smelled of antiseptic and a
+> strange, quiet sadness, and I didn't want to breathe them in. I didn't want
+> to acknowledge the weight in my lap, the warm, shuddering bulk of him, the
+> steady thump-thump-thump of his heart slowing, slowing, slowing until it was
+> just a ghost echo.
+
+Concrete detail instead of stock fantasy vocabulary. Worth saying plainly:
+suppression is not total. That second passage still contains one yardstick
+term. The measured reduction is roughly 70%, not 100%.
+
 ---
 
 ## How I found it
