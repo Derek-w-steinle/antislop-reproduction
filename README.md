@@ -8,6 +8,11 @@ problem I hit in the reference implementation.
 The paper's method works. I measured it on two model sizes and reproduced the
 core result. The fix below is about the released code, not the research.
 
+**Status:** reported upstream as
+[issue #3](https://github.com/sam-paech/auto-antislop/issues/3) on 2026-08-15.
+The author confirmed the finds the same day and requested a pull request;
+[PR #4](https://github.com/sam-paech/auto-antislop/pull/4) is open.
+
 ---
 
 ## Headline results
@@ -181,8 +186,11 @@ counting the float32 copies the loss math makes.
 building the rest.
 
 Line numbers in both causes were re-verified against upstream `main` on the day
-of writing (commit `da22315`, 2026-07-29). `logits_to_keep` appears zero times
-in the trainer, and no upstream commit addresses either issue.
+of writing (commit `da22315`, 2026-07-29). `logits_to_keep` appeared zero times
+in the trainer at that point. Both fixes are now proposed upstream in
+[PR #4](https://github.com/sam-paech/auto-antislop/pull/4), opened at the
+author's request after he confirmed the finds on
+[issue #3](https://github.com/sam-paech/auto-antislop/issues/3).
 
 ---
 
